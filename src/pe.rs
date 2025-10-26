@@ -163,10 +163,13 @@ impl<'a> Loader<'a> {
             header_offset += sector_size as u64;
         }
 
-        for section in sections {
-            for x in 0..section.virt_size {
-                loaded_region.write_u8(u64::from(x) + u64::from(section.virt_address), 0);
-            }
+        for section in sections.iter() {
+            loaded_region
+                .as_mut_slice::<u8>(
+                    u64::from(section.virt_address),
+                    u64::from(section.virt_size),
+                )
+                .fill(0);
 
             // TODO: Handle strange offset sections.
             if section.raw_offset % sector_size as u32 != 0 {
@@ -178,26 +181,23 @@ impl<'a> Loader<'a> {
                 Err(_) => return Err(Error::FileError),
             }
 
-            let mut section_data = SectorBuf::new();
-
-            let mut section_offset = 0;
             let section_size = core::cmp::min(section.raw_size, section.virt_size);
-            while section_offset < section_size {
-                let remaining_bytes =
-                    core::cmp::min(section_size - section_offset, sector_size as u32);
+            let loaded_section = loaded_region
+                .as_mut_slice::<u8>(u64::from(section.virt_address), u64::from(section_size));
+            let mut chunks = loaded_section.chunks_exact_mut(512);
+            for chunk in chunks.by_ref() {
+                if let Err(_) = self.file.read(chunk) {
+                    return Err(Error::FileError);
+                }
+            }
+            let remainder = chunks.into_remainder();
+            if remainder.len() > 0 {
+                let mut section_data = SectorBuf::new();
                 match self.file.read(section_data.as_mut_bytes()) {
                     Ok(_) => {}
-                    Err(_) => {
-                        return Err(Error::FileError);
-                    }
+                    Err(_) => return Err(Error::FileError),
                 }
-
-                let l: &mut [u8] = loaded_region.as_mut_slice(
-                    u64::from(section.virt_address + section_offset),
-                    u64::from(remaining_bytes),
-                );
-                l.copy_from_slice(&section_data.as_bytes()[0..remaining_bytes as usize]);
-                section_offset += remaining_bytes;
+                remainder.copy_from_slice(&section_data.as_bytes()[0..remainder.len()]);
             }
         }
 

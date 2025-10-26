@@ -203,7 +203,9 @@ pub fn efi_exec(
     // Populate with FDT table if present
     // To ensure ACPI is used during boot do not include FDT table on aarch64
     // https://github.com/torvalds/linux/blob/d528014517f2b0531862c02865b9d4c908019dc4/arch/arm64/kernel/acpi.c#L203
-    #[cfg(not(target_arch = "aarch64"))]
+    // NOTE: Kernel command-line parameters are passed via the FDT, so not including this is wrong.
+    // Instead, specifying `acpi=on` in the kernel command-line parameters ensures ACPI is used.
+    //#[cfg(not(target_arch = "aarch64"))]
     if let Some(fdt_entry) = info.fdt_reservation() {
         ct[ct_index] = efi::ConfigurationTable {
             vendor_guid: Guid::from_fields(
