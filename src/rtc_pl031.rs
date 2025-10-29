@@ -3,8 +3,13 @@
 
 use atomic_refcell::AtomicRefCell;
 use chrono::{DateTime, Datelike, Timelike};
+use r_efi::efi::MemoryDescriptor;
 
-use crate::{arch::aarch64::layout::map, mem};
+use crate::{
+    arch::aarch64::layout::map,
+    efi::ALLOCATOR,
+    mem::{self, MemoryRegion},
+};
 
 static RTC: AtomicRefCell<Pl031> = AtomicRefCell::new(Pl031::new(map::mmio::PL031_START));
 
@@ -50,4 +55,18 @@ pub fn read_date() -> Result<(u8, u8, u8), ()> {
 
 pub fn read_time() -> Result<(u8, u8, u8), ()> {
     RTC.borrow_mut().read_time()
+}
+
+/// When the OS remaps virtual-pages, we need to adjust our MMIO region.
+pub fn fix_up(descriptors: &[MemoryDescriptor]) {
+    let l = RTC.borrow_mut().region.as_bytes().len() as u64;
+    let new_base = ALLOCATOR
+        .borrow()
+        .convert_internal_pointer(
+            descriptors,
+            RTC.borrow_mut().region.as_bytes().as_ptr() as u64,
+        )
+        .unwrap();
+    let new_region = MemoryRegion::new(new_base, l);
+    RTC.borrow_mut().region = new_region;
 }

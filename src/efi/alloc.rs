@@ -219,67 +219,63 @@ impl Allocator {
         let dest = dest.unwrap();
 
         // Identical special case
-        if self.allocations[dest].descriptor.number_of_pages == page_count {
-            self.allocations[dest].descriptor.r#type = memory_type;
-            return (
-                Status::SUCCESS,
-                self.allocations[dest].descriptor.physical_start,
-            );
-        }
+        let assigned = if self.allocations[dest].descriptor.number_of_pages == page_count {
+            dest
+        } else {
+            match allocate_type {
+                efi::ALLOCATE_ADDRESS => {
+                    // Most complex: Three cases: at beginning, at end, in the middle.
 
-        let assigned;
-        match allocate_type {
-            efi::ALLOCATE_ADDRESS => {
-                // Most complex: Three cases: at beginning, at end, in the middle.
+                    // If allocating at the beginning, can just ignore 2nd half as is already marked as free
+                    if self.allocations[dest].descriptor.physical_start == address {
+                        let split = self.split_allocation(dest, page_count);
+                        if split.is_none() {
+                            return (Status::OUT_OF_RESOURCES, 0);
+                        }
+                        dest
+                    } else {
+                        // Work out how pages in the desired address and split at that
+                        let pages = (address - self.allocations[dest].descriptor.physical_start)
+                            / self.page_size;
+                        let split = self.split_allocation(dest, pages);
+                        if split.is_none() {
+                            return (Status::OUT_OF_RESOURCES, 0);
+                        }
+                        let split = split.unwrap();
 
-                // If allocating at the beginning, can just ignore 2nd half as is already marked as free
-                if self.allocations[dest].descriptor.physical_start == address {
+                        // If second half bigger than we need, split again but ignore that bit
+                        if self.allocations[split].descriptor.number_of_pages > page_count {
+                            let second_split = self.split_allocation(split, page_count);
+                            if second_split.is_none() {
+                                return (Status::OUT_OF_RESOURCES, 0);
+                            }
+                        }
+
+                        split
+                    }
+                }
+                efi::ALLOCATE_MAX_ADDRESS | efi::ALLOCATE_ANY_PAGES => {
+                    // With the more general allocation we always put at the start of the range
                     let split = self.split_allocation(dest, page_count);
                     if split.is_none() {
                         return (Status::OUT_OF_RESOURCES, 0);
                     }
-                    assigned = dest
-                } else {
-                    // Work out how pages in the desired address and split at that
-                    let pages = (address - self.allocations[dest].descriptor.physical_start)
-                        / self.page_size;
-                    let split = self.split_allocation(dest, pages);
-                    if split.is_none() {
-                        return (Status::OUT_OF_RESOURCES, 0);
-                    }
-                    let split = split.unwrap();
 
-                    // If second half bigger than we need, split again but ignore that bit
-                    if self.allocations[split].descriptor.number_of_pages > page_count {
-                        let second_split = self.split_allocation(split, page_count);
-                        if second_split.is_none() {
-                            return (Status::OUT_OF_RESOURCES, 0);
-                        }
-                    }
-
-                    assigned = split
+                    dest
+                }
+                _ => {
+                    return (Status::INVALID_PARAMETER, 0);
                 }
             }
-            efi::ALLOCATE_MAX_ADDRESS | efi::ALLOCATE_ANY_PAGES => {
-                // With the more general allocation we always put at the start of the range
-                let split = self.split_allocation(dest, page_count);
-                if split.is_none() {
-                    return (Status::OUT_OF_RESOURCES, 0);
-                }
-
-                assigned = dest;
-            }
-            _ => {
-                return (Status::INVALID_PARAMETER, 0);
-            }
-        }
+        };
 
         self.allocations[assigned].descriptor.r#type = memory_type;
         self.allocations[assigned].descriptor.attribute |= match memory_type {
-            efi::RUNTIME_SERVICES_CODE | efi::RUNTIME_SERVICES_DATA => r_efi::efi::MEMORY_RUNTIME,
+            efi::RUNTIME_SERVICES_CODE | efi::RUNTIME_SERVICES_DATA | efi::MEMORY_MAPPED_IO => {
+                r_efi::efi::MEMORY_RUNTIME
+            }
             _ => 0,
         };
-
         (
             Status::SUCCESS,
             self.allocations[assigned].descriptor.physical_start,

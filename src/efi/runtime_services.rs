@@ -44,6 +44,16 @@ pub static mut RS: SyncUnsafeCell<efi::RuntimeServices> =
         query_variable_info,
     });
 
+/// The ConfigurationTabl detailing which Runtime Services are supported by this firmware.
+pub static mut RT_PROPS: SyncUnsafeCell<efi::RtPropertiesTable> =
+    SyncUnsafeCell::new(efi::RtPropertiesTable {
+        version: efi::RT_PROPERTIES_TABLE_VERSION,
+        length: size_of::<efi::RtPropertiesTable>() as u16,
+        runtime_services_supported: efi::RT_SUPPORTED_GET_TIME
+            | efi::RT_SUPPORTED_SET_TIME
+            | efi::RT_SUPPORTED_SET_VIRTUAL_ADDRESS_MAP,
+    });
+
 #[allow(clippy::missing_transmute_annotations)]
 unsafe fn fixup_at_virtual(descriptors: &[MemoryDescriptor]) {
     #[allow(static_mut_refs)]
@@ -51,12 +61,28 @@ unsafe fn fixup_at_virtual(descriptors: &[MemoryDescriptor]) {
     #[allow(static_mut_refs)]
     let rs = RS.get_mut();
 
+    // Fix up the RTC MMIO address.
+    #[cfg(target_arch = "aarch64")]
+    rtc::fix_up(descriptors);
+
+    // Fixup Runtime Service function pointers.
+    let fixed_get_time_addr = ALLOCATOR
+        .borrow()
+        .convert_internal_pointer(descriptors, (rs.get_time as *const ()) as u64)
+        .unwrap();
+    rs.get_time = transmute(fixed_get_time_addr);
+
+    let fixed_set_time_addr = ALLOCATOR
+        .borrow()
+        .convert_internal_pointer(descriptors, (rs.set_time as *const ()) as u64)
+        .unwrap();
+    rs.set_time = transmute(fixed_set_time_addr);
+
+    // The rest are unsupported and so get the same fixed up ptr.
     let ptr = ALLOCATOR
         .borrow()
         .convert_internal_pointer(descriptors, (not_available as *const ()) as u64)
         .unwrap();
-    rs.get_time = transmute(ptr);
-    rs.set_time = transmute(ptr);
     rs.get_wakeup_time = transmute(ptr);
     rs.set_wakeup_time = transmute(ptr);
     rs.get_variable = transmute(ptr);

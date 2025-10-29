@@ -79,8 +79,12 @@ pub fn virt_mem_layout() -> &'static KernelVirtualLayout<NUM_MEM_RANGES> {
     &LAYOUT
 }
 
-pub fn mmio_range() -> Range<usize> {
-    map::mmio::START..map::mmio::END
+fn mmio_pl011_range() -> Range<usize> {
+    map::mmio::PL011_START..map::mmio::PL011_START + 0x1000
+}
+
+fn mmio_pl031_range() -> Range<usize> {
+    map::mmio::PL031_START..map::mmio::PL031_START + 0x1000
 }
 
 pub fn reserved_range() -> Range<usize> {
@@ -99,12 +103,17 @@ pub fn stack_range() -> Range<usize> {
     unsafe { (stack_start.get() as _)..(stack_end.get() as _) }
 }
 
-const NUM_MEM_DESCS: usize = 5;
+const NUM_MEM_DESCS: usize = 6;
 
 pub static MEM_LAYOUT: MemoryLayout<NUM_MEM_DESCS> = [
     MemoryDescriptor {
-        name: "MMIO",
-        range: mmio_range,
+        name: "PL011",
+        range: mmio_pl011_range,
+        attribute: MemoryAttribute::Mmio,
+    },
+    MemoryDescriptor {
+        name: "PL031",
+        range: mmio_pl031_range,
         attribute: MemoryAttribute::Mmio,
     },
     MemoryDescriptor {

@@ -9,7 +9,7 @@ use r_efi::{
     protocols::loaded_image::Protocol as LoadedImageProtocol,
 };
 
-use crate::{bootinfo, layout};
+use crate::{bootinfo, efi::runtime_services::RT_PROPS, layout};
 
 mod alloc;
 mod block;
@@ -87,6 +87,21 @@ static mut BLOCK_WRAPPERS: SyncUnsafeCell<block::BlockWrappers> =
 
 // Populate allocator from E820, fixed ranges for the firmware and the loaded binary.
 fn populate_allocator(info: &dyn bootinfo::Info, image_address: u64, image_size: u64) {
+    #[cfg(target_arch = "aarch64")]
+    for mmio_entry in info
+        .memory_layout()
+        .iter()
+        .filter(|l| matches!(l.attribute, layout::MemoryAttribute::Mmio))
+    {
+        // Account for MMIO so that the OS keeps any MMIO devices used in runtime services mapped.
+        ALLOCATOR.borrow_mut().add_initial_allocation(
+            efi::MEMORY_MAPPED_IO,
+            mmio_entry.page_count() as u64,
+            mmio_entry.range_start() as u64,
+            efi::MEMORY_WT | efi::MEMORY_RUNTIME,
+        );
+    }
+
     for i in 0..info.num_entries() {
         let entry = info.entry(i);
         match entry.entry_type {
@@ -108,7 +123,7 @@ fn populate_allocator(info: &dyn bootinfo::Info, image_address: u64, image_size:
             layout::MemoryAttribute::Code => efi::RUNTIME_SERVICES_CODE,
             layout::MemoryAttribute::Data => efi::RUNTIME_SERVICES_DATA,
             layout::MemoryAttribute::Unusable => efi::UNUSABLE_MEMORY,
-            layout::MemoryAttribute::Mmio => efi::MEMORY_MAPPED_IO,
+            layout::MemoryAttribute::Mmio => continue,
         };
         ALLOCATOR.borrow_mut().allocate_pages(
             efi::ALLOCATE_ADDRESS,
@@ -237,6 +252,17 @@ pub fn efi_exec(
         ct_index += 1;
     }
 
+    #[cfg(target_arch = "aarch64")]
+    {
+        // Advertise which runtime services are supported.
+        #[allow(static_mut_refs)]
+        let rt_props_table = unsafe { RT_PROPS.get() };
+        ct[ct_index] = efi::ConfigurationTable {
+            vendor_guid: efi::RT_PROPERTIES_TABLE_GUID,
+            vendor_table: rt_props_table as *mut _,
+        };
+    }
+
     // Othwerwise fill with zero vendor data
     if ct_index == 0 {
         ct[ct_index] = efi::ConfigurationTable {
@@ -267,7 +293,7 @@ pub fn efi_exec(
         #[allow(static_mut_refs)]
         BS.get_mut()
     };
-    st.number_of_table_entries = 1;
+    st.number_of_table_entries = ct_index;
     st.configuration_table = &mut ct[0];
 
     populate_allocator(info, loaded_address, loaded_size);
